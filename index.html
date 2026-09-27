@@ -22,6 +22,16 @@
 button{border:0;border-radius:999px;padding:15px 27px;min-width:220px;font-size:20px;font-weight:1000;color:#784300;background:linear-gradient(#ffe05b,#ffb631);box-shadow:0 8px 0 #d88d16;cursor:pointer}button:active{transform:translateY(4px);box-shadow:0 4px 0 #d88d16}button:disabled{opacity:.55}
 .small{margin-top:17px;font-size:12px;opacity:.72}.rotate{position:fixed;inset:0;z-index:20;display:none;place-items:center;text-align:center;background:#1976a3;color:#fff;font-size:25px;font-weight:900}
 @media(orientation:portrait) and (max-width:900px){.rotate{display:grid}}
+@media(max-height:650px) and (orientation:landscape){
+  #overlay{padding:8px;align-items:center;overflow:auto}
+  .card{width:min(620px,92vw);max-height:calc(100dvh - 16px);padding:12px 24px 14px;border-radius:22px;overflow:auto}
+  .logo{font-size:40px;line-height:.95}
+  h1{margin:2px 0 4px;font-size:34px}
+  .sub{margin:4px auto 6px;font-size:14px;line-height:1.28;max-width:540px}
+  .tip{margin:2px 0 8px;padding:5px 9px;font-size:12px}
+  button{padding:10px 22px;min-width:210px;font-size:17px}
+  .small{display:none}
+}
 </style>
 </head>
 <body>
