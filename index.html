@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#8fddff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Teresa Nose Bird</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#86dbff;font-family:ui-rounded,"SF Pro Rounded",system-ui,-apple-system,sans-serif;touch-action:none}canvas{display:block;width:100%;height:100%}
+#camBox{position:fixed;left:max(12px,env(safe-area-inset-left));bottom:max(12px,env(safe-area-inset-bottom));width:min(23vw,180px);aspect-ratio:4/3;border:3px solid #fff;border-radius:18px;overflow:hidden;z-index:4;display:none;box-shadow:0 8px 25px #15577a55;background:#123}
+#cam{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}#dot{display:none;position:absolute;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:#ff4569;box-shadow:0 0 0 4px #fff9,0 0 14px #ff4569}
+#label{position:absolute;right:6px;bottom:5px;color:#fff;background:#0006;padding:3px 6px;border-radius:9px;font-weight:800;font-size:10px}
+#hud{position:fixed;inset:0;z-index:5;pointer-events:none;color:#fff;font-weight:900;text-shadow:0 3px 10px #19587866}
+#score{position:absolute;top:max(12px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);font-size:clamp(32px,6vw,62px)}
+#best{position:absolute;top:max(14px,env(safe-area-inset-top));right:max(14px,env(safe-area-inset-right));background:#ffffffdd;color:#236789;padding:7px 11px;border-radius:20px;text-shadow:none}
+#status{position:absolute;top:14%;left:50%;transform:translateX(-50%);font-size:clamp(16px,2.4vw,24px);white-space:nowrap}
+#overlay{position:fixed;inset:0;z-index:10;display:grid;place-items:center;padding:20px;background:linear-gradient(#58c8f055,#397fb955);backdrop-filter:blur(4px)}
+.card{width:min(650px,94vw);padding:clamp(22px,4vw,38px);border-radius:30px;background:#fffffff0;color:#24536a;text-align:center;box-shadow:0 20px 70px #13527455}
+.logo{font-size:clamp(60px,11vw,100px);line-height:1}h1{margin:8px 0;font-size:clamp(34px,7vw,60px);color:#185a7b}.sub{font-size:clamp(16px,2.7vw,21px);line-height:1.45;font-weight:700}.tip{display:inline-block;margin:4px 0 18px;padding:8px 12px;border-radius:13px;background:#e8f9ff;color:#307392;font-weight:800}
+button{border:0;border-radius:999px;padding:15px 27px;min-width:220px;font-size:20px;font-weight:1000;color:#784300;background:linear-gradient(#ffe05b,#ffb631);box-shadow:0 8px 0 #d88d16;cursor:pointer}button:active{transform:translateY(4px);box-shadow:0 4px 0 #d88d16}button:disabled{opacity:.55}
+.small{margin-top:17px;font-size:12px;opacity:.72}.rotate{position:fixed;inset:0;z-index:20;display:none;place-items:center;text-align:center;background:#1976a3;color:#fff;font-size:25px;font-weight:900}
+@media(orientation:portrait) and (max-width:900px){.rotate{display:grid}}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="camBox"><video id="cam" playsinline muted></video><div id="dot"></div><div id="label">NOSE TRACKING</div></div>
+<div id="hud"><div id="score">0</div><div id="best">BEST 0</div><div id="status"></div></div>
+<div id="overlay"><div class="card"><div class="logo">🐥</div><h1>Teresa Nose Bird</h1><p class="sub">Move your nose up and down to guide the bird. Fly through the gaps and collect stars!</p><div class="tip">📱 Best on iPad / phone in landscape</div><br><button id="start">Start Camera & Play</button><div class="small">Face tracking runs in this browser. The camera is not uploaded by this game.</div></div></div>
+<div class="rotate">📱↔️<br>Turn your device sideways to play</div>
+<script type="module">
+import {FaceLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs";
+
+const canvas=document.getElementById("game"),ctx=canvas.getContext("2d");
+const video=document.getElementById("cam"),camBox=document.getElementById("camBox"),dot=document.getElementById("dot");
+const start=document.getElementById("start"),overlay=document.getElementById("overlay"),scoreEl=document.getElementById("score"),bestEl=document.getElementById("best"),statusEl=document.getElementById("status");
+
+let W=1280,H=720,dpr=1,landmarker,lastDetect=0,nose=null,faceH=.28,lastFace=0;
+let state="INTRO",calStart=0,samples=[],countStart=0,baseY=.5,baseH=.28,control=0;
+let score=0,best=Number(localStorage.getItem("noseBirdBest")||0),last=performance.now(),speed=285,obsTimer=0,starTimer=0;
+let bird={x:320,y:360,target:360,r:27,tilt:0},obstacles=[],stars=[],particles=[],world=0;
+let clouds=Array.from({length:9},function(_,i){return mkCloud(i*190+Math.random()*120)}),audio;
+
+bestEl.textContent="BEST "+best;
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function lerp(a,b,t){return a+(b-a)*t}
+function rand(a,b){return a+Math.random()*(b-a)}
+function mkCloud(x){return{x:x,y:60+Math.random()*420,s:.55+Math.random()*1.1,v:12+Math.random()*20}}
+function resize(){dpr=Math.min(2,devicePixelRatio||1);W=innerWidth;H=innerHeight;canvas.width=Math.round(W*dpr);canvas.height=Math.round(H*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);bird.x=Math.max(145,W*.27);if(state==="INTRO")bird.y=H*.5}
+addEventListener("resize",resize);resize();
+
+async function initTracker(){
+  const vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm");
+  const opts={baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",delegate:"GPU"},runningMode:"VIDEO",numFaces:1,minFaceDetectionConfidence:.5,minFacePresenceConfidence:.5,minTrackingConfidence:.5};
+  try{return await FaceLandmarker.createFromOptions(vision,opts)}catch(e){opts.baseOptions.delegate="CPU";return await FaceLandmarker.createFromOptions(vision,opts)}
+}
+function ensureAudio(){if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();if(audio.resume)audio.resume()}
+function tone(f,d){if(!audio)return;const o=audio.createOscillator(),g=audio.createGain();o.frequency.value=f;g.gain.value=.04;o.connect(g);g.connect(audio.destination);o.start();g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+d);o.stop(audio.currentTime+d)}
+async function begin(){
+  start.disabled=true;start.textContent="Starting...";
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:960},height:{ideal:720}},audio:false});
+    video.srcObject=stream;await video.play();camBox.style.display="block";
+    statusEl.textContent="Loading face tracking...";
+    if(!landmarker)landmarker=await initTracker();
+    overlay.style.display="none";ensureAudio();calibrate();
+  }catch(e){
+    console.error(e);start.disabled=false;start.textContent="Try Again";
+    alert(e&&e.name==="NotAllowedError"?"Camera permission was blocked. Please allow Camera access for this site.":"Camera could not start. Please use the HTTPS GitHub Pages link in Safari or Chrome.");
+  }
+}
+start.addEventListener("click",begin);
+
+function reset(){score=0;scoreEl.textContent="0";speed=285;obsTimer=0;starTimer=0;obstacles=[];stars=[];particles=[];bird.y=H*.5;bird.target=H*.5;bird.tilt=0}
+function calibrate(){state="CAL";calStart=performance.now();samples=[];reset();statusEl.textContent="Look at the screen 🙂  Calibrating..."}
+function countdown(){state="COUNT";countStart=performance.now();tone(520,.08)}
+function play(){state="PLAY";statusEl.textContent="";reset();obsTimer=-1200;starTimer=-350}
+function over(){
+  if(state!=="PLAY")return;state="OVER";statusEl.textContent="💥 Game Over — tap to try again";burst(bird.x,bird.y,28);tone(180,.18);setTimeout(function(){tone(110,.25)},120);
+  if(score>best){best=score;localStorage.setItem("noseBirdBest",best);bestEl.textContent="BEST "+best}
+}
+addEventListener("pointerdown",function(){if(state==="OVER")calibrate()});
+
+function track(now){
+  if(!landmarker||video.readyState<2||now-lastDetect<50)return;lastDetect=now;
+  let r;try{r=landmarker.detectForVideo(video,now)}catch(e){return}
+  const lm=r&&r.faceLandmarks&&r.faceLandmarks[0];
+  if(!lm||!lm.length){nose=null;dot.style.display="none";return}
+  const n=lm[1],fore=lm[10]||lm[8],chin=lm[152]||lm[175];
+  nose={x:n.x,y:n.y};faceH=Math.max(.12,Math.abs(chin.y-fore.y));lastFace=now;
+  dot.style.display="block";dot.style.left=((1-n.x)*100)+"%";dot.style.top=(n.y*100)+"%";
+  if(state==="CAL")samples.push({y:n.y,h:faceH});
+}
+function controlBird(now){
+  if(state==="CAL"){
+    const t=now-calStart,left=Math.max(0,2.2-t/1000);
+    statusEl.textContent=nose?"Hold still 🙂  "+left.toFixed(1)+"s":"I can’t see your face yet 👀";
+    if(t>2200&&samples.length>10){
+      const ys=samples.map(function(s){return s.y}).sort(function(a,b){return a-b});
+      const hs=samples.map(function(s){return s.h}).sort(function(a,b){return a-b});
+      baseY=ys[Math.floor(ys.length/2)];baseH=hs[Math.floor(hs.length/2)];control=0;countdown();
+    }
+    return;
+  }
+  if(state==="COUNT"){
+    const t=(now-countStart)/1000,n=3-Math.floor(t);statusEl.textContent=n>0?String(n):"GO!";
+    if(t>3.4)play();return;
+  }
+  if(state!=="PLAY")return;
+  if(!nose||now-lastFace>400){statusEl.textContent="👀 Move back into the camera";return}
+  statusEl.textContent="";
+  const raw=(nose.y-baseY)/Math.max(.12,baseH),dz=.018;
+  const a=Math.abs(raw)<dz?0:Math.sign(raw)*(Math.abs(raw)-dz);
+  control=lerp(control,a,.16);
+  bird.target=H*.5+clamp(control*2.65,-1,1)*H*.37;
+}
+function spawnObstacle(){
+  const margin=Math.max(76,H*.11),gap=clamp(H*(.35-score*.002),H*.25,H*.35),center=rand(margin+gap/2,H-margin-gap/2),width=clamp(W*.085,72,116);
+  obstacles.push({x:W+35,w:width,c:center,g:gap,passed:false});
+}
+function spawnStar(){
+  const o=obstacles.find(function(x){return x.x>W*.65});
+  const y=o?clamp(o.c+rand(-o.g*.22,o.g*.22),65,H-65):rand(85,H-85);
+  stars.push({x:W+55,y:y,r:16,p:Math.random()*6.28});
+}
+function burst(x,y,n){for(let i=0;i<n;i++)particles.push({x:x,y:y,vx:rand(-180,180),vy:rand(-210,90),life:rand(.45,.85),t:0,r:rand(3,7)})}
+function update(dt){
+  world+=dt;clouds.forEach(function(c){c.x-=c.v*dt;if(c.x<-180*c.s)Object.assign(c,mkCloud(W+rand(30,230)))});
+  particles.forEach(function(p){p.t+=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=400*dt});particles=particles.filter(function(p){return p.t<p.life});
+  if(state!=="PLAY"){bird.y=lerp(bird.y,state==="INTRO"?H*.5+Math.sin(world*2)*12:bird.target,.06);return}
+  bird.y=lerp(bird.y,bird.target,1-Math.pow(.001,dt));bird.tilt=lerp(bird.tilt,clamp((bird.target-bird.y)*.012,-.42,.42),.12);
+  speed=Math.min(465,285+score*4.2);obsTimer+=dt*1000;starTimer+=dt*1000;
+  if(obsTimer>Math.max(1050,1550-score*10)){obsTimer=0;spawnObstacle()}if(starTimer>1200){starTimer=0;spawnStar()}
+  obstacles.forEach(function(o){
+    o.x-=speed*dt;if(!o.passed&&o.x+o.w<bird.x-bird.r){o.passed=true;score++;scoreEl.textContent=score;tone(760,.055)}
+    const inX=bird.x+bird.r>o.x&&bird.x-bird.r<o.x+o.w,top=o.c-o.g/2,bottom=o.c+o.g/2;
+    if(inX&&(bird.y-bird.r<top||bird.y+bird.r>bottom))over();
+  });
+  obstacles=obstacles.filter(function(o){return o.x+o.w>-60});
+  stars.forEach(function(s){s.x-=speed*dt;s.p+=dt*4;const dx=s.x-bird.x,dy=s.y-bird.y;if(dx*dx+dy*dy<(bird.r+s.r+6)*(bird.r+s.r+6)){score+=2;scoreEl.textContent=score;burst(s.x,s.y,11);tone(1050,.07);s.hit=true}});
+  stars=stars.filter(function(s){return !s.hit&&s.x>-40});
+  if(bird.y-bird.r<0||bird.y+bird.r>H)over();
+}
+function roundRect(x,y,w,h,r){ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,y,w,h,r);else ctx.rect(x,y,w,h)}
+function bg(){
+  const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,"#82ddff");g.addColorStop(.62,"#b9ecff");g.addColorStop(1,"#f7eeb2");ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  ctx.fillStyle="#fff399bb";ctx.beginPath();ctx.arc(W*.82,H*.18,Math.min(W,H)*.07,0,Math.PI*2);ctx.fill();
+  clouds.forEach(function(c){ctx.save();ctx.translate(c.x,c.y);ctx.scale(c.s,c.s);ctx.globalAlpha=.72;ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(0,18,30,0,Math.PI*2);ctx.arc(35,0,43,0,Math.PI*2);ctx.arc(78,20,31,0,Math.PI*2);ctx.rect(0,18,78,31);ctx.fill();ctx.restore()});
+}
+function wall(x,y,w,h,top){
+  if(h<=0)return;const g=ctx.createLinearGradient(x,0,x+w,0);g.addColorStop(0,"#42c67a");g.addColorStop(.55,"#76de82");g.addColorStop(1,"#2fa764");ctx.fillStyle=g;roundRect(x,y,w,h,18);ctx.fill();
+  const ch=Math.min(30,h),cy=top?y+h-ch:y;ctx.fillStyle="#36b96d";roundRect(x-8,cy,w+16,ch,10);ctx.fill();
+}
+function drawStar(s){
+  const pulse=1+Math.sin(s.p)*.12;ctx.save();ctx.translate(s.x,s.y);ctx.scale(pulse,pulse);ctx.rotate(s.p*.2);ctx.shadowColor="#ffd84b";ctx.shadowBlur=16;ctx.fillStyle="#ffdb3d";ctx.beginPath();
+  for(let i=0;i<10;i++){const a=-Math.PI/2+i*Math.PI/5,r=i%2?7:s.r,x=Math.cos(a)*r,y=Math.sin(a)*r;i?ctx.lineTo(x,y):ctx.moveTo(x,y)}ctx.closePath();ctx.fill();ctx.restore();
+}
+function drawBird(){
+  ctx.save();ctx.translate(bird.x,bird.y);ctx.rotate(bird.tilt);ctx.fillStyle="#ffad2e";ctx.beginPath();ctx.ellipse(-16,8,19,13,-.45,0,Math.PI*2);ctx.fill();
+  const g=ctx.createRadialGradient(-8,-12,5,0,0,36);g.addColorStop(0,"#fff79c");g.addColorStop(.45,"#ffd943");g.addColorStop(1,"#f4a81f");ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,bird.r,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(10,-9,9,0,Math.PI*2);ctx.fill();ctx.fillStyle="#153b4a";ctx.beginPath();ctx.arc(13,-8,4,0,Math.PI*2);ctx.fill();ctx.fillStyle="#ff7957";ctx.beginPath();ctx.moveTo(22,-2);ctx.lineTo(43,4);ctx.lineTo(22,10);ctx.closePath();ctx.fill();ctx.restore();
+}
+function render(){
+  ctx.clearRect(0,0,W,H);bg();obstacles.forEach(function(o){wall(o.x,0,o.w,o.c-o.g/2,true);wall(o.x,o.c+o.g/2,o.w,H-(o.c+o.g/2),false)});stars.forEach(drawStar);
+  particles.forEach(function(p){ctx.globalAlpha=1-p.t/p.life;ctx.fillStyle="#ffe352";ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill()});ctx.globalAlpha=1;drawBird();
+  if(state==="CAL"){ctx.strokeStyle="#ffffffaa";ctx.lineWidth=4;ctx.setLineDash([10,14]);ctx.beginPath();ctx.moveTo(0,H*.5);ctx.lineTo(W,H*.5);ctx.stroke();ctx.setLineDash([])}
+}
+function frame(now){const dt=Math.min(.035,(now-last)/1000||.016);last=now;track(now);controlBird(now);update(dt);render();requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
